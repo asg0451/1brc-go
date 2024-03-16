@@ -55,7 +55,7 @@ func main() {
 	}
 }
 
-const filename = "measurements.txt"
+const filename = "measurements_100m.txt"
 
 // input:
 // Station name;Temperature
