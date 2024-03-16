@@ -4,7 +4,10 @@ go 1.22.0
 
 toolchain go1.22.1
 
-require go.coldcutz.net/go-stuff v0.0.0-20240222020121-e7bc41ea880c
+require (
+	go.coldcutz.net/go-stuff v0.0.0-20240222020121-e7bc41ea880c
+	golang.org/x/exp v0.0.0-20240314144324-c7f7c6466f7f
+)
 
 require (
 	github.com/golang/protobuf v1.5.3 // indirect
