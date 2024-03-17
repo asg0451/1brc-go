@@ -73,7 +73,7 @@ func main() {
 	}
 }
 
-const filename = "measurements_100m.txt"
+const filename = "measurements.txt"
 
 // input:
 // Station name;Temperature
@@ -106,6 +106,9 @@ type stats struct {
 // 1.538 s ±  0.068 s - custom semicolon splitting
 // 1.239 s ±  0.048 s - prealllocating hash tables with 10k size
 // 1.116 s ±  0.056 s - interning station names
+// ** swapping to 1b rows **
+// 11.552 s ±  0.409 s - above
+//
 // graveyard:
 // - iterating in reverse order in splitOnSemi
 // - using [swiss maps](https://github.com/dolthub/swiss) instead of builtin
@@ -219,6 +222,7 @@ func (w *worker) parseLineBytes(line []byte) (string, float64, error) {
 	stationBs, tempStr := w.splitOnSemi(line)
 
 	// use or create interned station name
+	// this is a bit sus because we could get hash collisions. odds: 10k / 2^32 = 2.3e-6
 	w.hasher.Reset()
 	_, _ = w.hasher.Write(stationBs)
 	hash := w.hasher.Sum32()
