@@ -196,7 +196,7 @@ func (w *worker) run(chunk job, rdr io.ReaderAt, res map[string]*stats) error {
 
 		station, temp, err := w.parseLineBytes(line)
 		if err != nil {
-			panic("parsing line " + err.Error())
+			return fmt.Errorf("parsing line %w", err)
 		}
 		if _, ok := res[station]; !ok {
 			res[station] = &stats{min: temp, max: temp}
@@ -209,7 +209,7 @@ func (w *worker) run(chunk job, rdr io.ReaderAt, res map[string]*stats) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		panic("scanning " + err.Error())
+		return fmt.Errorf("parsing line %w", err)
 	}
 
 	return nil
