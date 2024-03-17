@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -12,8 +11,6 @@ import (
 	"runtime/pprof"
 	"runtime/trace"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 
 	"go.coldcutz.net/go-stuff/utils"
@@ -103,7 +100,9 @@ type stats struct {
 // 3.665 s ±  0.133 s - mmap char by char (a bit slower)
 // 3.329 s ±  0.075 s - mmap with buffered reading
 // 2.490 s ±  0.087 s - same but with GOGC=off. now we're just cpu bound i think
-// next: custom parsing
+// 2.402 s ±  0.068 s - custom float parsing
+// 1.538 s ±  0.068 s - custom semicolon splitting
+// next: is there a way we can not do the station name string alloc
 func run(log *slog.Logger) error {
 	numWorkers := runtime.NumCPU()
 
@@ -158,9 +157,9 @@ func run(log *slog.Logger) error {
 			sb := make([]byte, 0, 1024*1024)
 			scanner.Buffer(sb, cap(sb))
 			for scanner.Scan() {
-				line := scanner.Text()
+				line := scanner.Bytes()
 
-				station, temp, err := parseLine(line)
+				station, temp, err := parseLineBytes(line)
 				if err != nil {
 					panic("parsing line " + err.Error())
 				}
@@ -189,26 +188,49 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-func parseLine(line string) (station string, temp float64, err error) {
-	parts := strings.SplitN(line, ";", 2)
-	temp, err = strconv.ParseFloat(parts[1], 64)
-	if err != nil {
-		return "", 0, fmt.Errorf("parsing temperature: %w", err)
-	}
-	return parts[0], temp, nil
-}
-
-var sep = []byte{';'}
-
 func parseLineBytes(line []byte) (station string, temp float64, err error) {
-	parts := bytes.SplitN(line, sep, 2)
-	temp, err = strconv.ParseFloat(string(parts[1]), 64)
-	if err != nil {
-		return "", 0, fmt.Errorf("parsing temperature: %w", err)
-	}
-	return string(parts[0]), temp, nil
+	station, tempStr := splitOnSemi(line)
+	temp = parseFloat(tempStr)
+	return station, temp, nil
 }
 
+func splitOnSemi(bs []byte) (string, []byte) {
+	for i, b := range bs {
+		if b == ';' {
+			return string(bs[:i]), bs[i+1:]
+		}
+	}
+	return string(bs), nil
+}
+
+func parseFloat(bs []byte) float64 {
+	// Temperature value: non null double between -99.9 (inclusive) and 99.9 (inclusive), always with one fractional digit
+	sign := 1.
+	if bs[0] == '-' {
+		sign = -1.
+		bs = bs[1:]
+	}
+	intPart := bs
+	for i, b := range bs {
+		if b == '.' {
+			intPart = bs[:i]
+			continue
+		}
+		bs[i] -= '0'
+	}
+
+	// parse the int part
+	ip := 0
+	for i := 0; i < len(intPart); i++ {
+		ip *= 10
+		ip += int(intPart[i])
+	}
+
+	// parse the fractional part
+	fp := int(bs[len(bs)-1])
+
+	return sign * (float64(ip) + float64(fp)/10)
+}
 func printRes(res map[string]*stats) {
 	// {Abha=-23.0/18.0/59.2, Abidjan=-16.2/26.0/67.3, Abéché=-10.0/29.4/69.0, Accra=-10.1/26.4/66.4, Addis Ababa=-23.7/16.0/67.0, Adelaide=-27.8/17.3/58.5, ...}
 	names := maps.Keys(res)
