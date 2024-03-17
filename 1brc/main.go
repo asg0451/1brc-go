@@ -80,6 +80,8 @@ type stats struct {
 	min, max, sum, count float32
 }
 
+// invocation: $ go build -o bin/ ./1brc && GOGC=off hyperfine -w1 ./bin/1brc
+
 // (for 100m rows)
 // 12.338 s ± 0.026 s - start
 // 11.989 s ±  0.095 s - increase scanner buffer
