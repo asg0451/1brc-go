@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -16,6 +18,7 @@ import (
 
 	"go.coldcutz.net/go-stuff/utils"
 	"golang.org/x/exp/maps"
+	"golang.org/x/exp/mmap"
 )
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
@@ -97,69 +100,82 @@ type stats struct {
 // 11.989 s ±  0.095 s - increase scanner buffer
 // 3.544 s ±  0.061 s - parallelize
 // - trace analysis: workers are starved. can we increase the read speed?
+// 3.665 s ±  0.133 s - mmap char by char (a bit slower)
+// 3.329 s ±  0.075 s - mmap with buffered reading
+// 2.490 s ±  0.087 s - same but with GOGC=off. now we're just cpu bound i think
 // next: custom parsing
-func run(_ *slog.Logger) error {
+func run(log *slog.Logger) error {
+	numWorkers := runtime.NumCPU()
+
 	wg := &sync.WaitGroup{}
 
-	lineses := make(chan []string)
+	rdr, err := mmap.Open(filename)
+	if err != nil {
+		return fmt.Errorf("mmapping file %w", err)
+	}
+	defer rdr.Close()
+	fileLen := rdr.Len()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(lineses)
-
-		fh, err := os.Open(filename)
-		if err != nil {
-			panic("opening file " + err.Error())
+	// divvy up the file. each worker gets a slice of the file but we need to make sure we don't split in the middle of a line
+	type job struct {
+		start, end int // inclusive start, exclusive end
+	}
+	chunks := make([]job, numWorkers)
+	chunkSize := fileLen / numWorkers
+	nextStart := 0
+	for ci := range chunks {
+		start := nextStart
+		chunks[ci].start = start
+		// if this is the last chunk, just take the rest of the file
+		if ci == numWorkers-1 {
+			chunks[ci].end = fileLen
+			break
 		}
-		defer fh.Close()
-
-		rdr := bufio.NewScanner(fh)
-		rdr.Buffer(make([]byte, 0, 64*1024*1024), 64*1024*1024) // larger buffer
-
-		const lineBufSize = 10 * 1024
-		lineBuf := make([]string, 0, lineBufSize)
-
-		for rdr.Scan() {
-			line := rdr.Text()
-			lineBuf = append(lineBuf, line)
-			if len(lineBuf) == cap(lineBuf) {
-				lineses <- lineBuf
-				lineBuf = make([]string, 0, lineBufSize)
+		// find the last EOL before the end of the chunk
+		theoreticalEnd := start + chunkSize
+		for i := theoreticalEnd; i > start; i-- {
+			if rdr.At(i) == '\n' {
+				chunks[ci].end = i
+				break
 			}
 		}
-		if err := rdr.Err(); err != nil {
-			panic("scanner error " + err.Error())
-		}
-	}()
-
-	var numWorkers = runtime.NumCPU()
+		nextStart = chunks[ci].end + 1
+	}
 
 	resultses := make([]map[string]*stats, numWorkers)
 
 	for i := range numWorkers {
 		res := make(map[string]*stats) // theoretically this is now ok!
 		resultses[i] = res
+		chunk := chunks[i]
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
-			for lines := range lineses {
-				for _, line := range lines {
-					station, temp, err := parseLine(line)
-					if err != nil {
-						panic("parsing line " + err.Error())
-					}
-					if _, ok := res[station]; !ok {
-						res[station] = &stats{min: temp, max: temp}
-					}
-					s := res[station]
-					s.min = min(s.min, temp)
-					s.max = max(s.max, temp)
-					s.sum += temp
-					s.count++
+			srdr := io.NewSectionReader(rdr, int64(chunk.start), int64(chunk.end-chunk.start))
+			scanner := bufio.NewScanner(srdr)
+			sb := make([]byte, 0, 1024*1024)
+			scanner.Buffer(sb, cap(sb))
+			for scanner.Scan() {
+				line := scanner.Text()
+
+				station, temp, err := parseLine(line)
+				if err != nil {
+					panic("parsing line " + err.Error())
 				}
+				if _, ok := res[station]; !ok {
+					res[station] = &stats{min: temp, max: temp}
+				}
+				s := res[station]
+				s.min = min(s.min, temp)
+				s.max = max(s.max, temp)
+				s.sum += temp
+				s.count++
+			}
+
+			if err := scanner.Err(); err != nil {
+				panic("scanning " + err.Error())
 			}
 		}()
 	}
@@ -180,6 +196,17 @@ func parseLine(line string) (station string, temp float64, err error) {
 		return "", 0, fmt.Errorf("parsing temperature: %w", err)
 	}
 	return parts[0], temp, nil
+}
+
+var sep = []byte{';'}
+
+func parseLineBytes(line []byte) (station string, temp float64, err error) {
+	parts := bytes.SplitN(line, sep, 2)
+	temp, err = strconv.ParseFloat(string(parts[1]), 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("parsing temperature: %w", err)
+	}
+	return string(parts[0]), temp, nil
 }
 
 func printRes(res map[string]*stats) {
