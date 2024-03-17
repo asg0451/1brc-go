@@ -77,7 +77,7 @@ func main() {
 const filename = "measurements.txt"
 
 type stats struct {
-	min, max, sum, count float64
+	min, max, sum, count float32
 }
 
 // (for 100m rows)
@@ -94,6 +94,7 @@ type stats struct {
 // 1.116 s ±  0.056 s - interning station names
 // ** swapping to 1b rows **
 // 11.552 s ±  0.409 s - above
+// 11.542 s ±  0.083 s - switch to float32s
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -204,7 +205,7 @@ func (w *worker) run(chunk job, rdr io.ReaderAt, res map[string]*stats) error {
 	return nil
 }
 
-func (w *worker) parseLineBytes(line []byte) (string, float64, error) {
+func (w *worker) parseLineBytes(line []byte) (string, float32, error) {
 	stationBs, tempStr := w.splitOnSemi(line)
 
 	// use or create interned station name
@@ -232,9 +233,9 @@ func (w *worker) splitOnSemi(bs []byte) ([]byte, []byte) {
 	panic("no semicolon found")
 }
 
-func parseFloat(bs []byte) float64 {
+func parseFloat(bs []byte) float32 {
 	// Temperature value: non null double between -99.9 (inclusive) and 99.9 (inclusive), always with one fractional digit
-	sign := 1.
+	sign := float32(1.)
 	if bs[0] == '-' {
 		sign = -1.
 		bs = bs[1:]
@@ -258,7 +259,7 @@ func parseFloat(bs []byte) float64 {
 	// parse the fractional part
 	fp := int(bs[len(bs)-1])
 
-	return sign * (float64(ip) + float64(fp)/10)
+	return sign * (float32(ip) + float32(fp)/10)
 }
 func printRes(res map[string]*stats) {
 	// {Abha=-23.0/18.0/59.2, Abidjan=-16.2/26.0/67.3, Abéché=-10.0/29.4/69.0, Accra=-10.1/26.4/66.4, Addis Ababa=-23.7/16.0/67.0, Adelaide=-27.8/17.3/58.5, ...}
