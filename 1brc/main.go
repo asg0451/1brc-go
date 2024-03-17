@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"hash"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"os"
@@ -103,7 +105,7 @@ type stats struct {
 // 2.402 s ±  0.068 s - custom float parsing
 // 1.538 s ±  0.068 s - custom semicolon splitting
 // 1.239 s ±  0.048 s - prealllocating hash tables with 10k size
-// next: is there a way we can not do the station name string alloc
+// 1.116 s ±  0.056 s - interning station names
 // graveyard:
 // - iterating in reverse order in splitOnSemi
 // - using [swiss maps](https://github.com/dolthub/swiss) instead of builtin
@@ -120,9 +122,6 @@ func run(log *slog.Logger) error {
 	fileLen := rdr.Len()
 
 	// divvy up the file. each worker gets a slice of the file but we need to make sure we don't split in the middle of a line
-	type job struct {
-		start, end int // inclusive start, exclusive end
-	}
 	chunks := make([]job, numWorkers)
 	chunkSize := fileLen / numWorkers
 	nextStart := 0
@@ -155,30 +154,9 @@ func run(log *slog.Logger) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-
-			srdr := io.NewSectionReader(rdr, int64(chunk.start), int64(chunk.end-chunk.start))
-			scanner := bufio.NewScanner(srdr)
-			sb := make([]byte, 0, 1024*1024)
-			scanner.Buffer(sb, cap(sb))
-			for scanner.Scan() {
-				line := scanner.Bytes()
-
-				station, temp, err := parseLineBytes(line)
-				if err != nil {
-					panic("parsing line " + err.Error())
-				}
-				if _, ok := res[station]; !ok {
-					res[station] = &stats{min: temp, max: temp}
-				}
-				s := res[station]
-				s.min = min(s.min, temp)
-				s.max = max(s.max, temp)
-				s.sum += temp
-				s.count++
-			}
-
-			if err := scanner.Err(); err != nil {
-				panic("scanning " + err.Error())
+			w := NewWorker()
+			if err := w.run(chunk, rdr, res); err != nil {
+				log.Error("worker error", "err", err)
 			}
 		}()
 	}
@@ -192,20 +170,76 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-func parseLineBytes(line []byte) (station string, temp float64, err error) {
-	station, tempStr := splitOnSemi(line)
-	temp = parseFloat(tempStr)
+type job struct {
+	start, end int // inclusive start, exclusive end
+}
+
+type worker struct {
+	hasher            hash.Hash32
+	stationNameHashes map[int64]string
+}
+
+func NewWorker() *worker {
+	return &worker{
+		hasher:            fnv.New32(),
+		stationNameHashes: make(map[int64]string, 10_000),
+	}
+}
+
+func (w *worker) run(chunk job, rdr io.ReaderAt, res map[string]*stats) error {
+	srdr := io.NewSectionReader(rdr, int64(chunk.start), int64(chunk.end-chunk.start))
+	scanner := bufio.NewScanner(srdr)
+	sb := make([]byte, 0, 1024*1024)
+	scanner.Buffer(sb, cap(sb))
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		station, temp, err := w.parseLineBytes(line)
+		if err != nil {
+			panic("parsing line " + err.Error())
+		}
+		if _, ok := res[station]; !ok {
+			res[station] = &stats{min: temp, max: temp}
+		}
+		s := res[station]
+		s.min = min(s.min, temp)
+		s.max = max(s.max, temp)
+		s.sum += temp
+		s.count++
+	}
+
+	if err := scanner.Err(); err != nil {
+		panic("scanning " + err.Error())
+	}
+
+	return nil
+}
+
+func (w *worker) parseLineBytes(line []byte) (string, float64, error) {
+	stationBs, tempStr := w.splitOnSemi(line)
+
+	// use or create interned station name
+	w.hasher.Reset()
+	_, _ = w.hasher.Write(stationBs)
+	hash := w.hasher.Sum32()
+	station, ok := w.stationNameHashes[int64(hash)]
+	if !ok {
+		station = string(stationBs)
+		w.stationNameHashes[int64(hash)] = station
+	}
+
+	temp := parseFloat(tempStr)
 	return station, temp, nil
 }
 
-func splitOnSemi(bs []byte) (string, []byte) {
+func (w *worker) splitOnSemi(bs []byte) ([]byte, []byte) {
 	// you might think it would be faster to go from the back but turns out no
 	for i, b := range bs {
 		if b == ';' {
-			return string(bs[:i]), bs[i+1:]
+			return bs[:i], bs[i+1:]
 		}
 	}
-	return string(bs), nil
+	panic("no semicolon found")
 }
 
 func parseFloat(bs []byte) float64 {
