@@ -196,6 +196,7 @@ func parseLineBytes(line []byte) (station string, temp float64, err error) {
 }
 
 func splitOnSemi(bs []byte) (string, []byte) {
+	// you might think it would be faster to go from the back but turns out no
 	for i, b := range bs {
 		if b == ';' {
 			return string(bs[:i]), bs[i+1:]
