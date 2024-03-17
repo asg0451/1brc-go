@@ -102,6 +102,7 @@ type stats struct {
 // 2.490 s ±  0.087 s - same but with GOGC=off. now we're just cpu bound i think
 // 2.402 s ±  0.068 s - custom float parsing
 // 1.538 s ±  0.068 s - custom semicolon splitting
+// 1.239 s ±  0.048 s - prealllocating hash tables with 10k size
 // next: is there a way we can not do the station name string alloc
 func run(log *slog.Logger) error {
 	numWorkers := runtime.NumCPU()
@@ -144,7 +145,7 @@ func run(log *slog.Logger) error {
 	resultses := make([]map[string]*stats, numWorkers)
 
 	for i := range numWorkers {
-		res := make(map[string]*stats) // theoretically this is now ok!
+		res := make(map[string]*stats, 10_000) // theoretically this is now ok!
 		resultses[i] = res
 		chunk := chunks[i]
 
