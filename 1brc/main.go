@@ -104,6 +104,9 @@ type stats struct {
 // 1.538 s ±  0.068 s - custom semicolon splitting
 // 1.239 s ±  0.048 s - prealllocating hash tables with 10k size
 // next: is there a way we can not do the station name string alloc
+// graveyard:
+// - iterating in reverse order in splitOnSemi
+// - using [swiss maps](https://github.com/dolthub/swiss) instead of builtin
 func run(log *slog.Logger) error {
 	numWorkers := runtime.NumCPU()
 
