@@ -102,6 +102,7 @@ type stats struct {
 // - iterating in reverse order in splitOnSemi
 // - using [swiss maps](https://github.com/dolthub/swiss) instead of builtin
 // - replacing *stats with stats in maps
+// - manual loop var stuff
 func run(log *slog.Logger) error {
 	numWorkers := runtime.NumCPU()
 
