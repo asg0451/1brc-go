@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"runtime/trace"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
 var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
+var traceprofile = flag.String("trace", "", "write trace to `file`")
 
 func main() {
 	flag.Parse()
@@ -32,6 +34,18 @@ func main() {
 			panic(err)
 		}
 		defer pprof.StopCPUProfile()
+	}
+
+	if *traceprofile != "" {
+		f, err := os.Create(*traceprofile)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		if err := trace.Start(f); err != nil {
+			panic(err)
+		}
+		defer trace.Stop()
 	}
 
 	_, done, log, err := utils.StdSetup()
@@ -82,6 +96,7 @@ type stats struct {
 // 12.338 s ± 0.026 s - start
 // 11.989 s ±  0.095 s - increase scanner buffer
 // 3.544 s ±  0.061 s - parallelize
+// - trace analysis: workers are starved. can we increase the read speed?
 // next: custom parsing
 func run(_ *slog.Logger) error {
 	wg := &sync.WaitGroup{}
@@ -106,7 +121,7 @@ func run(_ *slog.Logger) error {
 		lineBuf := make([]string, 0, lineBufSize)
 
 		for rdr.Scan() {
-			line := rdr.Text() // could use .Bytes()
+			line := rdr.Text()
 			lineBuf = append(lineBuf, line)
 			if len(lineBuf) == cap(lineBuf) {
 				lineses <- lineBuf

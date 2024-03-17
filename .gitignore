@@ -2,3 +2,4 @@ bin/
 measurements.txt
 measurements_*.txt
 *.prof
+trace.out
