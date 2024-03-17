@@ -80,6 +80,9 @@ type stats struct {
 	min, max, sum, count float64
 }
 
+// 12.338 s ± 0.026 s - start
+// 11.989 s ±  0.095 s - increase scanner buffer
+// next: try parallelizing. also custom parsing
 func naive() error {
 	fh, err := os.Open(filename)
 	if err != nil {
@@ -90,6 +93,7 @@ func naive() error {
 	res := make(map[string]*stats)
 
 	rdr := bufio.NewScanner(fh)
+	rdr.Buffer(make([]byte, 0, 64*1024*1024), 64*1024*1024) // larger buffer
 	for rdr.Scan() {
 		line := rdr.Text() // could use .Bytes()
 		station, temp, err := parseLine(line)
