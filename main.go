@@ -100,6 +100,7 @@ type stats struct {
 // 10.334 s ±  0.364 s - pgo
 // 9.893 s ±  0.162 s  - manual mmap
 // 9.389 s ±  0.105 s  - manual line handling
+// 9.085 s ±  0.121 s  - cleanup + better run?
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -118,6 +119,10 @@ func run(log *slog.Logger) error {
 	defer close()
 
 	fileLen := len(mmappedFile)
+
+	type job struct {
+		start, end int // inclusive start, exclusive end
+	}
 
 	// divvy up the file. each worker gets a slice of the file but we need to make sure we don't split in the middle of a line
 	chunks := make([]job, numWorkers)
@@ -153,7 +158,7 @@ func run(log *slog.Logger) error {
 		go func() {
 			defer wg.Done()
 			w := NewWorker()
-			if err := w.run(chunk, mmappedFile, res); err != nil {
+			if err := w.run(mmappedFile[chunk.start:chunk.end], res); err != nil {
 				log.Error("worker error", "err", err)
 			}
 		}()
@@ -187,11 +192,7 @@ func setupMmap() ([]byte, func(), error) {
 		return nil, func() {}, fmt.Errorf("mmap: %w", err)
 	}
 
-	return data, func() { syscall.Munmap(data) }, nil
-}
-
-type job struct {
-	start, end int // inclusive start, exclusive end
+	return data, func() { _ = syscall.Munmap(data) }, nil
 }
 
 type worker struct {
@@ -206,13 +207,13 @@ func NewWorker() *worker {
 	}
 }
 
-func (w *worker) run(chunk job, mmappedFile []byte, res map[string]*stats) error {
+func (w *worker) run(chunk []byte, res map[string]*stats) error {
 	// our chunk is guaranteed to be made of full lines only
-	lineStart := chunk.start
-	for i := chunk.start; i < chunk.end; i++ {
-		if mmappedFile[i] == '\n' {
+	lineStart := 0
+	for i := 0; i < len(chunk); i++ {
+		if chunk[i] == '\n' {
 			// handle line
-			station, temp, err := w.parseLineBytes(mmappedFile[lineStart:i])
+			station, temp, err := w.parseLineBytes(chunk[lineStart:i])
 			if err != nil {
 				return fmt.Errorf("parsing line %w", err)
 			}
