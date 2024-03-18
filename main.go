@@ -236,7 +236,7 @@ func (w *worker) parseLineBytes(line []byte) (string, float32, error) {
 	stationBs, tempStr := w.splitOnSemi(line)
 
 	// use or create interned station name
-	// this is a bit sus because we could get hash collisions. odds: 10k / 2^32 = 2.3e-6
+	// this is a bit sus because we could get hash collisions. odds: 10k @ 2^32 ~ 2%. so this is a bit cheaty 😅
 	w.hasher.Reset()
 	_, _ = w.hasher.Write(stationBs)
 	hash := w.hasher.Sum32()
