@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"hash"
@@ -14,10 +15,10 @@ import (
 	"runtime/trace"
 	"slices"
 	"sync"
+	"syscall"
 
 	"go.coldcutz.net/go-stuff/utils"
 	"golang.org/x/exp/maps"
-	"golang.org/x/exp/mmap"
 )
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
@@ -100,6 +101,7 @@ type stats struct {
 // 11.276 s ±  0.385 s - optimized parsefloat more
 // 10.921 s ±  0.275 s - fixed unnecessary conversions in hash+interning
 // 10.334 s ±  0.364 s - pgo
+// 9.893 s ±  0.162 s  - manual mmap
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -111,12 +113,13 @@ func run(log *slog.Logger) error {
 
 	wg := &sync.WaitGroup{}
 
-	rdr, err := mmap.Open(filename)
+	mmappedFile, close, err := setupMmap()
 	if err != nil {
-		return fmt.Errorf("mmapping file %w", err)
+		return fmt.Errorf("setting up mmap %w", err)
 	}
-	defer rdr.Close()
-	fileLen := rdr.Len()
+	defer close()
+
+	fileLen := len(mmappedFile)
 
 	// divvy up the file. each worker gets a slice of the file but we need to make sure we don't split in the middle of a line
 	chunks := make([]job, numWorkers)
@@ -133,7 +136,7 @@ func run(log *slog.Logger) error {
 		// find the last EOL before the end of the chunk
 		theoreticalEnd := start + chunkSize
 		for i := theoreticalEnd; i > start; i-- {
-			if rdr.At(i) == '\n' {
+			if mmappedFile[i] == '\n' {
 				chunks[ci].end = i
 				break
 			}
@@ -152,7 +155,7 @@ func run(log *slog.Logger) error {
 		go func() {
 			defer wg.Done()
 			w := NewWorker()
-			if err := w.run(chunk, rdr, res); err != nil {
+			if err := w.run(chunk, mmappedFile, res); err != nil {
 				log.Error("worker error", "err", err)
 			}
 		}()
@@ -165,6 +168,28 @@ func run(log *slog.Logger) error {
 	printRes(res)
 
 	return nil
+}
+
+func setupMmap() ([]byte, func(), error) {
+	// custom mmap since exp/mmap's ReaderAt does copies
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("opening file: %w", err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("statting file: %w", err)
+	}
+
+	size := fi.Size()
+
+	data, err := syscall.Mmap(int(f.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("mmap: %w", err)
+	}
+
+	return data, func() { syscall.Munmap(data) }, nil
 }
 
 type job struct {
@@ -183,8 +208,8 @@ func NewWorker() *worker {
 	}
 }
 
-func (w *worker) run(chunk job, rdr io.ReaderAt, res map[string]*stats) error {
-	srdr := io.NewSectionReader(rdr, int64(chunk.start), int64(chunk.end-chunk.start))
+func (w *worker) run(chunk job, mmappedFile []byte, res map[string]*stats) error {
+	srdr := io.NewSectionReader(bytes.NewReader(mmappedFile), int64(chunk.start), int64(chunk.end-chunk.start))
 	scanner := bufio.NewScanner(srdr)
 	sb := make([]byte, 0, 1024*1024)
 	scanner.Buffer(sb, cap(sb))
