@@ -98,6 +98,7 @@ type stats struct {
 // 11.552 s ±  0.409 s - above
 // 11.542 s ±  0.083 s - switch to float32s
 // 11.276 s ±  0.385 s - optimized parsefloat more
+// 10.921 s ±  0.275 s - fixed unnecessary conversions in hash+interning
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -171,13 +172,13 @@ type job struct {
 
 type worker struct {
 	hasher            hash.Hash32
-	stationNameHashes map[int64]string
+	stationNameHashes map[uint32]string
 }
 
 func NewWorker() *worker {
 	return &worker{
 		hasher:            fnv.New32(),
-		stationNameHashes: make(map[int64]string, 10_000),
+		stationNameHashes: make(map[uint32]string, 10_000),
 	}
 }
 
@@ -218,10 +219,10 @@ func (w *worker) parseLineBytes(line []byte) (string, float32, error) {
 	w.hasher.Reset()
 	_, _ = w.hasher.Write(stationBs)
 	hash := w.hasher.Sum32()
-	station, ok := w.stationNameHashes[int64(hash)]
+	station, ok := w.stationNameHashes[hash]
 	if !ok {
 		station = string(stationBs)
-		w.stationNameHashes[int64(hash)] = station
+		w.stationNameHashes[hash] = station
 	}
 
 	temp := parseFloat(tempStr)
