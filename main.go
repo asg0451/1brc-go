@@ -1,13 +1,10 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"flag"
 	"fmt"
 	"hash"
 	"hash/fnv"
-	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -102,6 +99,7 @@ type stats struct {
 // 10.921 s ±  0.275 s - fixed unnecessary conversions in hash+interning
 // 10.334 s ±  0.364 s - pgo
 // 9.893 s ±  0.162 s  - manual mmap
+// 9.389 s ±  0.105 s  - manual line handling
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -209,31 +207,27 @@ func NewWorker() *worker {
 }
 
 func (w *worker) run(chunk job, mmappedFile []byte, res map[string]*stats) error {
-	srdr := io.NewSectionReader(bytes.NewReader(mmappedFile), int64(chunk.start), int64(chunk.end-chunk.start))
-	scanner := bufio.NewScanner(srdr)
-	sb := make([]byte, 0, 1024*1024)
-	scanner.Buffer(sb, cap(sb))
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	// our chunk is guaranteed to be made of full lines only
+	lineStart := chunk.start
+	for i := chunk.start; i < chunk.end; i++ {
+		if mmappedFile[i] == '\n' {
+			// handle line
+			station, temp, err := w.parseLineBytes(mmappedFile[lineStart:i])
+			if err != nil {
+				return fmt.Errorf("parsing line %w", err)
+			}
+			if _, ok := res[station]; !ok {
+				res[station] = &stats{min: temp, max: temp}
+			}
+			s := res[station]
+			s.min = min(s.min, temp)
+			s.max = max(s.max, temp)
+			s.sum += temp
+			s.count++
 
-		station, temp, err := w.parseLineBytes(line)
-		if err != nil {
-			return fmt.Errorf("parsing line %w", err)
+			lineStart = i + 1
 		}
-		if _, ok := res[station]; !ok {
-			res[station] = &stats{min: temp, max: temp}
-		}
-		s := res[station]
-		s.min = min(s.min, temp)
-		s.max = max(s.max, temp)
-		s.sum += temp
-		s.count++
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("parsing line %w", err)
-	}
-
 	return nil
 }
 
