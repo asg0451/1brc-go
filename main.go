@@ -97,6 +97,7 @@ type stats struct {
 // ** swapping to 1b rows **
 // 11.552 s ±  0.409 s - above
 // 11.542 s ±  0.083 s - switch to float32s
+// 11.276 s ±  0.385 s - optimized parsefloat more
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -244,26 +245,18 @@ func parseFloat(bs []byte) float32 {
 		sign = -1.
 		bs = bs[1:]
 	}
-	intPart := bs
-	for i, b := range bs {
-		if b == '.' {
-			intPart = bs[:i]
-			continue
-		}
-		bs[i] -= '0'
+
+	intPart := bs[:len(bs)-2]
+	fracPart := bs[len(bs)-1] - '0'
+
+	var ip int
+	if len(intPart) == 2 {
+		ip = int((intPart[0]-'0')*10 + (intPart[1] - '0'))
+	} else {
+		ip = int(intPart[0] - '0')
 	}
 
-	// parse the int part
-	ip := 0
-	for i := 0; i < len(intPart); i++ {
-		ip *= 10
-		ip += int(intPart[i])
-	}
-
-	// parse the fractional part
-	fp := int(bs[len(bs)-1])
-
-	return sign * (float32(ip) + float32(fp)/10)
+	return sign * (float32(ip) + float32(fracPart)/10)
 }
 func printRes(res map[string]*stats) {
 	// {Abha=-23.0/18.0/59.2, Abidjan=-16.2/26.0/67.3, Abéché=-10.0/29.4/69.0, Accra=-10.1/26.4/66.4, Addis Ababa=-23.7/16.0/67.0, Adelaide=-27.8/17.3/58.5, ...}
