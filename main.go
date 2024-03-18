@@ -80,7 +80,7 @@ type stats struct {
 	min, max, sum, count float32
 }
 
-// invocation: $ go build -o bin/ . && GOGC=off hyperfine -w1 ./bin/1brc
+// invocation: $ ./make.sh && GOGC=off hyperfine -w1 -m5 ./bin/1brc
 
 // (for 100m rows)
 // 12.338 s ± 0.026 s - start
@@ -99,6 +99,7 @@ type stats struct {
 // 11.542 s ±  0.083 s - switch to float32s
 // 11.276 s ±  0.385 s - optimized parsefloat more
 // 10.921 s ±  0.275 s - fixed unnecessary conversions in hash+interning
+// 10.334 s ±  0.364 s - pgo
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
