@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/kamstrup/intmap"
 	"go.coldcutz.net/go-stuff/utils"
 	"golang.org/x/exp/maps"
@@ -105,6 +106,7 @@ type stats struct {
 // 7.346 s ±  0.144 s - swiss map
 // 4.530 s ±  0.077 s - intmap plus remove interning indirection
 // 4.134 s ±  0.118 s - guess based split on semi
+// 4.418 s ±  0.129 s - use a real hash function to make it more legit. slower :(
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -151,10 +153,10 @@ func run(log *slog.Logger) error {
 		nextStart = chunks[ci].end + 1
 	}
 
-	resultses := make([]*intmap.Map[uint16, *stats], numWorkers)
+	resultses := make([]*intmap.Map[uint64, *stats], numWorkers)
 
 	for i := range numWorkers {
-		res := intmap.New[uint16, *stats](10_000)
+		res := intmap.New[uint64, *stats](10_000)
 		resultses[i] = res
 		chunk := chunks[i]
 
@@ -208,7 +210,7 @@ func NewWorker() *worker {
 	return &worker{}
 }
 
-func (w *worker) run(chunk []byte, res *intmap.Map[uint16, *stats]) error {
+func (w *worker) run(chunk []byte, res *intmap.Map[uint64, *stats]) error {
 	// our chunk is guaranteed to be made of full lines only
 	lineStart := 0
 	for i := 0; i < len(chunk); i++ {
@@ -234,7 +236,7 @@ func (w *worker) run(chunk []byte, res *intmap.Map[uint16, *stats]) error {
 	return nil
 }
 
-func (w *worker) parseLineBytes(line []byte) ([]byte, uint16, float32, error) {
+func (w *worker) parseLineBytes(line []byte) ([]byte, uint64, float32, error) {
 	stationBs, tempStr := w.splitOnSemi(line)
 
 	stationHash := stationHash(stationBs)
@@ -255,13 +257,8 @@ func (w *worker) splitOnSemi(bs []byte) ([]byte, []byte) {
 	panic("no semicolon found")
 }
 
-// this is a bit sus because it's not resistant to anagrams but uhhhh it's ok :)
-func stationHash(name []byte) uint16 {
-	hash := uint16(0)
-	for _, b := range name {
-		hash += uint16(b)
-	}
-	return hash
+func stationHash(name []byte) uint64 {
+	return xxhash.Sum64(name)
 }
 
 func parseFloat(bs []byte) float32 {
@@ -284,7 +281,7 @@ func parseFloat(bs []byte) float32 {
 
 	return sign * (float32(ip) + float32(fracPart)/10)
 }
-func printRes(res *intmap.Map[uint16, *stats]) {
+func printRes(res *intmap.Map[uint64, *stats]) {
 	// {Abha=-23.0/18.0/59.2, Abidjan=-16.2/26.0/67.3, Abéché=-10.0/29.4/69.0, Accra=-10.1/26.4/66.4, Addis Ababa=-23.7/16.0/67.0, Adelaide=-27.8/17.3/58.5, ...}
 	namesTohashes := getStationsToHashes(res)
 	names := maps.Keys(namesTohashes)
@@ -298,10 +295,10 @@ func printRes(res *intmap.Map[uint16, *stats]) {
 	fmt.Printf("}\n")
 }
 
-func mergeResults(resultses []*intmap.Map[uint16, *stats]) *intmap.Map[uint16, *stats] {
-	res := intmap.New[uint16, *stats](resultses[0].Len())
+func mergeResults(resultses []*intmap.Map[uint64, *stats]) *intmap.Map[uint64, *stats] {
+	res := intmap.New[uint64, *stats](resultses[0].Len())
 	for _, r := range resultses {
-		r.ForEach(func(k uint16, v *stats) {
+		r.ForEach(func(k uint64, v *stats) {
 			s, ok := res.Get(k)
 			if !ok {
 				s = v
@@ -317,9 +314,9 @@ func mergeResults(resultses []*intmap.Map[uint16, *stats]) *intmap.Map[uint16, *
 	return res
 }
 
-func getStationsToHashes(m *intmap.Map[uint16, *stats]) map[string]uint16 {
-	names := make(map[string]uint16, m.Len())
-	m.ForEach(func(k uint16, s *stats) {
+func getStationsToHashes(m *intmap.Map[uint64, *stats]) map[string]uint64 {
+	names := make(map[string]uint64, m.Len())
+	m.ForEach(func(k uint64, s *stats) {
 		names[s.station] = k
 	})
 	return names

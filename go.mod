@@ -5,6 +5,7 @@ go 1.22.0
 toolchain go1.22.1
 
 require (
+	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/kamstrup/intmap v0.2.0
 	go.coldcutz.net/go-stuff v0.0.0-20240222020121-e7bc41ea880c
 	golang.org/x/exp v0.0.0-20240318143956-a85f2c67cd81
