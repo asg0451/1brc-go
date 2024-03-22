@@ -12,8 +12,8 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/dolthub/swiss"
 	"go.coldcutz.net/go-stuff/utils"
-	"golang.org/x/exp/maps"
 )
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
@@ -100,6 +100,7 @@ type stats struct {
 // 9.389 s ±  0.105 s  - manual line handling
 // 9.085 s ±  0.121 s  - cleanup + better run?
 // 7.818 s ±  0.250 s - switch from hash to just byte sum
+// 7.346 s ±  0.144 s - swiss map
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -146,10 +147,10 @@ func run(log *slog.Logger) error {
 		nextStart = chunks[ci].end + 1
 	}
 
-	resultses := make([]map[string]*stats, numWorkers)
+	resultses := make([]*swiss.Map[string, *stats], numWorkers)
 
 	for i := range numWorkers {
-		res := make(map[string]*stats, 10_000) // theoretically this is now ok!
+		res := swiss.NewMap[string, *stats](10_000) // theoretically this is now ok!
 		resultses[i] = res
 		chunk := chunks[i]
 
@@ -207,7 +208,7 @@ func NewWorker() *worker {
 	}
 }
 
-func (w *worker) run(chunk []byte, res map[string]*stats) error {
+func (w *worker) run(chunk []byte, res *swiss.Map[string, *stats]) error {
 	// our chunk is guaranteed to be made of full lines only
 	lineStart := 0
 	for i := 0; i < len(chunk); i++ {
@@ -217,10 +218,11 @@ func (w *worker) run(chunk []byte, res map[string]*stats) error {
 			if err != nil {
 				return fmt.Errorf("parsing line %w", err)
 			}
-			if _, ok := res[station]; !ok {
-				res[station] = &stats{min: temp, max: temp}
+			s, ok := res.Get(station)
+			if !ok {
+				s = &stats{min: temp, max: temp}
+				res.Put(station, s)
 			}
-			s := res[station]
 			s.min = min(s.min, temp)
 			s.max = max(s.max, temp)
 			s.sum += temp
@@ -285,32 +287,44 @@ func parseFloat(bs []byte) float32 {
 
 	return sign * (float32(ip) + float32(fracPart)/10)
 }
-func printRes(res map[string]*stats) {
+func printRes(res *swiss.Map[string, *stats]) {
 	// {Abha=-23.0/18.0/59.2, Abidjan=-16.2/26.0/67.3, Abéché=-10.0/29.4/69.0, Accra=-10.1/26.4/66.4, Addis Ababa=-23.7/16.0/67.0, Adelaide=-27.8/17.3/58.5, ...}
-	names := maps.Keys(res)
+	names := mapKeys(res)
 	slices.Sort(names)
 
 	fmt.Printf("{")
 	for _, name := range names {
-		stats := res[name]
+		stats, _ := res.Get(name)
 		fmt.Printf("%s=%.1f/%.1f/%.1f,", name, stats.min, stats.max, stats.sum/stats.count)
 	}
 	fmt.Printf("}\n")
 }
 
-func mergeResults(resultses []map[string]*stats) map[string]*stats {
-	res := make(map[string]*stats)
+func mergeResults(resultses []*swiss.Map[string, *stats]) *swiss.Map[string, *stats] {
+	res := swiss.NewMap[string, *stats](uint32(resultses[0].Count()))
 	for _, r := range resultses {
-		for k, v := range r {
-			if _, ok := res[k]; !ok {
-				res[k] = v
+		r.Iter(func(k string, v *stats) (stop bool) {
+			s, ok := res.Get(k)
+			if !ok {
+				s = v
+				res.Put(k, s)
 			} else {
-				res[k].min = min(res[k].min, v.min)
-				res[k].max = max(res[k].max, v.max)
-				res[k].sum += v.sum
-				res[k].count += v.count
+				s.min = min(s.min, v.min)
+				s.max = max(s.max, v.max)
+				s.sum += v.sum
+				s.count += v.count
 			}
-		}
+			return false
+		})
 	}
 	return res
+}
+
+func mapKeys[K comparable, V any](m *swiss.Map[K, V]) []K {
+	keys := make([]K, 0, m.Count())
+	m.Iter(func(k K, v V) (stop bool) {
+		keys = append(keys, k)
+		return false
+	})
+	return keys
 }
