@@ -3,8 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"hash"
-	"hash/fnv"
 	"log/slog"
 	"os"
 	"runtime"
@@ -101,6 +99,7 @@ type stats struct {
 // 9.893 s ±  0.162 s  - manual mmap
 // 9.389 s ±  0.105 s  - manual line handling
 // 9.085 s ±  0.121 s  - cleanup + better run?
+// 7.818 s ±  0.250 s - switch from hash to just byte sum
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -196,13 +195,11 @@ func setupMmap() ([]byte, func(), error) {
 }
 
 type worker struct {
-	hasher            hash.Hash32
 	stationNameHashes map[uint32]string
 }
 
 func NewWorker() *worker {
 	return &worker{
-		hasher:            fnv.New32(),
 		stationNameHashes: make(map[uint32]string, 10_000),
 	}
 }
@@ -236,10 +233,7 @@ func (w *worker) parseLineBytes(line []byte) (string, float32, error) {
 	stationBs, tempStr := w.splitOnSemi(line)
 
 	// use or create interned station name
-	// this is a bit sus because we could get hash collisions. odds: 10k @ 2^32 ~ 2%. so this is a bit cheaty 😅
-	w.hasher.Reset()
-	_, _ = w.hasher.Write(stationBs)
-	hash := w.hasher.Sum32()
+	hash := stationHash(stationBs)
 	station, ok := w.stationNameHashes[hash]
 	if !ok {
 		station = string(stationBs)
@@ -258,6 +252,14 @@ func (w *worker) splitOnSemi(bs []byte) ([]byte, []byte) {
 		}
 	}
 	panic("no semicolon found")
+}
+
+func stationHash(name []byte) uint32 {
+	hash := uint32(0)
+	for _, b := range name {
+		hash += uint32(b)
+	}
+	return hash
 }
 
 func parseFloat(bs []byte) float32 {
