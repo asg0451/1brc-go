@@ -156,6 +156,9 @@ func run(log *slog.Logger) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+
+			// would be cool to lock to one cpu using unix.SchedSetaffinity() but it's not available on mac i think :(
+
 			w := NewWorker()
 			if err := w.run(mmappedFile[chunk.start:chunk.end], res); err != nil {
 				log.Error("worker error", "err", err)
