@@ -104,6 +104,7 @@ type stats struct {
 // 7.818 s ±  0.250 s - switch from hash to just byte sum
 // 7.346 s ±  0.144 s - swiss map
 // 4.530 s ±  0.077 s - intmap plus remove interning indirection
+// 4.134 s ±  0.118 s - guess based split on semi
 //
 // graveyard:
 // - iterating in reverse order in splitOnSemi
@@ -242,11 +243,14 @@ func (w *worker) parseLineBytes(line []byte) ([]byte, uint16, float32, error) {
 }
 
 func (w *worker) splitOnSemi(bs []byte) ([]byte, []byte) {
-	// you might think it would be faster to go from the back but turns out no
-	for i, b := range bs {
-		if b == ';' {
-			return bs[:i], bs[i+1:]
-		}
+	// the format is like ABC;-1.0. the semicolon can only be in a few places from the end: -5 (2 digit pos temp or 1 dig neg), -6 (neg), -4 (1 digit pos temp)
+	// the most common variant is 4 digits, then 3, then 5. so check in that order
+	if i := len(bs) - 5; bs[i] == ';' {
+		return bs[:i], bs[i+1:]
+	} else if i := len(bs) - 4; bs[i] == ';' {
+		return bs[:i], bs[i+1:]
+	} else if i := len(bs) - 6; bs[i] == ';' {
+		return bs[:i], bs[i+1:]
 	}
 	panic("no semicolon found")
 }
