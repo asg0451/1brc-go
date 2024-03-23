@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -211,29 +212,59 @@ func NewWorker() *worker {
 	return &worker{}
 }
 
-func (w *worker) run(chunk []byte, res *intmap.Map[uint64, *stats]) error {
+//go:noinline
+func (w *worker) run(data []byte, res *intmap.Map[uint64, *stats]) error {
 	// our chunk is guaranteed to be made of full lines only
-	lineStart := 0
-	for i := 0; i < len(chunk); i++ {
-		if chunk[i] == '\n' {
-			// handle line
-			stationBs, stationHash, temp, err := w.parseLineBytes(chunk[lineStart:i])
-			if err != nil {
-				return fmt.Errorf("parsing line %w", err)
-			}
-			s, ok := res.Get(stationHash)
-			if !ok {
-				s = &stats{min: temp, max: temp, station: string(stationBs)}
-				res.Put(stationHash, s)
-			}
-			s.min = min(s.min, temp)
-			s.max = max(s.max, temp)
-			s.sum += temp
-			s.count++
+	newlineVector := make([]byte, 8)
+	for i := range newlineVector {
+		newlineVector[i] = '\n'
+	}
+	newlineMask := binary.LittleEndian.Uint64(newlineVector)
 
+	lineStart := 0
+	// Iterate through the data in 8-byte chunks
+	for i := 0; i <= len(data)-8; i += 8 {
+		chunk := binary.LittleEndian.Uint64(data[i : i+8])
+
+		if chunk^newlineMask != 0 {
+			for j := i; j < i+8 && j < len(data); j++ {
+				if data[j] == '\n' {
+					if err := w.handleLine(data[lineStart:j], res); err != nil {
+						return fmt.Errorf("handling line: %w", err)
+					}
+					lineStart = j + 1
+				}
+			}
+		}
+	}
+
+	// process the remaining bytes individually
+	for i := len(data) - (len(data) % 8); i < len(data); i++ {
+		if data[i] == '\n' {
+			if err := w.handleLine(data[lineStart:i], res); err != nil {
+				return fmt.Errorf("handling line: %w", err)
+			}
 			lineStart = i + 1
 		}
 	}
+
+	return nil
+}
+
+func (w *worker) handleLine(line []byte, res *intmap.Map[uint64, *stats]) error {
+	stationBs, stationHash, temp, err := w.parseLineBytes(line)
+	if err != nil {
+		return fmt.Errorf("parsing line %w", err)
+	}
+	s, ok := res.Get(stationHash)
+	if !ok {
+		s = &stats{min: temp, max: temp, station: string(stationBs)}
+		res.Put(stationHash, s)
+	}
+	s.min = min(s.min, temp)
+	s.max = max(s.max, temp)
+	s.sum += temp
+	s.count++
 	return nil
 }
 
