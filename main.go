@@ -113,6 +113,7 @@ type stats struct {
 // - using [swiss maps](https://github.com/dolthub/swiss) instead of builtin
 // - replacing *stats with stats in maps
 // - manual loop var stuff
+// - using bytes.IndexByte instead of a for loop to split on lines
 func run(log *slog.Logger) error {
 	numWorkers := runtime.NumCPU()
 
