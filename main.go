@@ -223,10 +223,6 @@ func (w *worker) run(data []byte, res *intmap.Map[uint64, *stats]) error {
 		chunk := *(*uint64)(unsafe.Pointer(&data[i])) // aka binary.LittleEndian.Uint64(data[i : i+8])
 		masked := chunk ^ newlineMask                 // this results in a zero byte where there is a newline
 
-		// maskedDebug := make([]byte, 8)
-		// binary.LittleEndian.PutUint64(maskedDebug, masked)
-		// fmt.Printf("processing chunk. i: %d, chunk: (%+v) %q, masked: %+v, ls: %d\n", i, data[i:i+8], string(data[i:i+8]), maskedDebug, lineStart)
-
 		// if no bytes are zero, there are no newlines in this chunk
 		if !containsZeroByte(masked) {
 			continue
@@ -234,9 +230,6 @@ func (w *worker) run(data []byte, res *intmap.Map[uint64, *stats]) error {
 
 		// if there is a zero byte, we need to find out where it is
 		// shift the masked value right until the first byte is zero
-		// this will give us the position of the first zero byte
-		// we can then use that to find the position of the newline
-
 		for j := 0; j < 8; j++ {
 			if masked&0xff == 0 {
 				// fmt.Printf("found newline at %d - %q\n", i+j, string(data[lineStart:i+j]))
