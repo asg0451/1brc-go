@@ -5,3 +5,4 @@ measurements_*.txt
 trace.out
 *.txt.gz
 *.txt.xz
+baseline-results.txt

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -12,6 +11,7 @@ import (
 	"slices"
 	"sync"
 	"syscall"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/kamstrup/intmap"
@@ -215,26 +215,37 @@ func NewWorker() *worker {
 //go:noinline
 func (w *worker) run(data []byte, res *intmap.Map[uint64, *stats]) error {
 	// our chunk is guaranteed to be made of full lines only
-	newlineVector := make([]byte, 8)
-	for i := range newlineVector {
-		newlineVector[i] = '\n'
-	}
-	newlineMask := binary.LittleEndian.Uint64(newlineVector)
+	const newlineMask uint64 = 0x0A0A0A0A0A0A0A0A
 
 	lineStart := 0
 	// Iterate through the data in 8-byte chunks
 	for i := 0; i <= len(data)-8; i += 8 {
-		chunk := binary.LittleEndian.Uint64(data[i : i+8])
+		chunk := *(*uint64)(unsafe.Pointer(&data[i])) // aka binary.LittleEndian.Uint64(data[i : i+8])
+		masked := chunk ^ newlineMask                 // this results in a zero byte where there is a newline
 
-		if chunk^newlineMask != 0 {
-			for j := i; j < i+8 && j < len(data); j++ {
-				if data[j] == '\n' {
-					if err := w.handleLine(data[lineStart:j], res); err != nil {
-						return fmt.Errorf("handling line: %w", err)
-					}
-					lineStart = j + 1
+		// maskedDebug := make([]byte, 8)
+		// binary.LittleEndian.PutUint64(maskedDebug, masked)
+		// fmt.Printf("processing chunk. i: %d, chunk: (%+v) %q, masked: %+v, ls: %d\n", i, data[i:i+8], string(data[i:i+8]), maskedDebug, lineStart)
+
+		// if no bytes are zero, there are no newlines in this chunk
+		if !containsZeroByte(masked) {
+			continue
+		}
+
+		// if there is a zero byte, we need to find out where it is
+		// shift the masked value right until the first byte is zero
+		// this will give us the position of the first zero byte
+		// we can then use that to find the position of the newline
+
+		for j := 0; j < 8; j++ {
+			if masked&0xff == 0 {
+				// fmt.Printf("found newline at %d - %q\n", i+j, string(data[lineStart:i+j]))
+				if err := w.handleLine(data[lineStart:i+j], res); err != nil {
+					return fmt.Errorf("handling line: %w", err)
 				}
+				lineStart = i + j + 1
 			}
+			masked >>= 8
 		}
 	}
 
@@ -352,4 +363,9 @@ func getStationsToHashes(m *intmap.Map[uint64, *stats]) map[string]uint64 {
 		names[s.station] = k
 	})
 	return names
+}
+
+// magic; see https://jameshfisher.com/2017/01/24/bitwise-check-for-zero-byte/
+func containsZeroByte(v uint64) bool {
+	return (v-uint64(0x0101010101010101))&^(v)&uint64(0x8080808080808080) > 0
 }
